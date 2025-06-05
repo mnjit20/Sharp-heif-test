@@ -1,0 +1,20 @@
+{
+  "name": "Sharp-heif-test",
+  "version": "1.0.0",
+  "description": "",
+  "main": "app.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node app.js"
+  },
+  "author": "Manjeet Verma",
+  "license": "ISC",
+  "dependencies": {
+    "build": "echo 'No build necessary' && exit 0",
+    "express": "^4.21.0",
+    "multer": "^1.4.5-lts.1",
+    "node-addon-api": "^8.2.1",
+    "node-gyp": "^10.2.0",
+    "sharp": "^0.33.5"
+  }
+}
