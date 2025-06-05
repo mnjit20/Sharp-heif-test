@@ -1,7 +1,7 @@
 # Test HEIF Images with Sharp Library
 
 
-## Command to build docker file
+## Command
 
 ```bash
 # build docker image
