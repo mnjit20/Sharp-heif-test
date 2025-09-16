@@ -1,87 +1,101 @@
-FROM node:22.16.0-alpine3.20 AS base
+# --------------------------
+# Stage 1: Build dependencies
+# --------------------------
+FROM node:22.16.0-alpine3.20 AS build
 
 USER root
 
 ARG LIBDE265_VERSION=1.0.15
-ENV LIBDE265_VERSION=$LIBDE265_VERSION
-
 ARG LIBHEIF_VERSION=1.18.2
-ENV LIBHEIF_VERSION=$LIBHEIF_VERSION
-
 ARG VIPS_VERSION=8.15.3
-ENV VIPS_VERSION=$VIPS_VERSION
 
+ENV LIBDE265_VERSION=$LIBDE265_VERSION \
+    LIBHEIF_VERSION=$LIBHEIF_VERSION \
+    VIPS_VERSION=$VIPS_VERSION \
+    LD_LIBRARY_PATH="/usr/local/lib:$LD_LIBRARY_PATH"
+
+# Base tools
 RUN apk add --no-cache \
-    make gcc g++ python3 git nodejs npm zip
+    bash curl git make gcc g++ python3 cmake \
+    autoconf automake libtool meson ninja \
+    pkgconfig glib-dev expat-dev tiff-dev libjpeg-turbo-dev \
+    libpng-dev libexif-dev libgsf-dev zlib-dev
 
-RUN apk add --no-cache \
-    cmake autoconf automake libtool meson ninja curl \
-    pkgconfig glib-dev expat-dev tiff-dev libjpeg-turbo-dev libgsf libexif libpng-dev cgif libjxl libimagequant
-
-# Install libwebp
-RUN git clone https://chromium.googlesource.com/webm/libwebp && \
-    cd libwebp && \
-    ./autogen.sh && \
-    ./configure && \
-    make && \
-    make install && \
-    cd .. && \
-    rm -rf libwebp
-
-# Install x265
-RUN git clone https://bitbucket.org/multicoreware/x265_git.git && \
-    cd x265_git && \
-    cmake source && \
-    make && \
-    cd .. && \
-    rm -rf x265_git
-
-# Install libde265
-RUN curl -L https://github.com/strukturag/libde265/releases/download/v${LIBDE265_VERSION}/libde265-${LIBDE265_VERSION}.tar.gz | \
-    tar zx && \
+# --------------------------
+# Build libde265
+# --------------------------
+RUN curl -L https://github.com/strukturag/libde265/releases/download/v${LIBDE265_VERSION}/libde265-${LIBDE265_VERSION}.tar.gz \
+    | tar zx && \
     cd libde265-${LIBDE265_VERSION} && \
     ./autogen.sh && \
     ./configure && \
-    mkdir build && \
-    cd build && \
-    cmake .. && \
-    make && \
-    make install && \
-    cd ../.. && \
-    rm -rf libde265-${LIBDE265_VERSION}
+    make -j$(nproc) && make install && \
+    cd .. && rm -rf libde265-${LIBDE265_VERSION}
 
-# Install libheif
-RUN curl -L https://github.com/strukturag/libheif/releases/download/v${LIBHEIF_VERSION}/libheif-${LIBHEIF_VERSION}.tar.gz | \
-    tar zx && \
+# --------------------------
+# Build x265
+# --------------------------
+RUN git clone https://bitbucket.org/multicoreware/x265_git.git && \
+    cd x265_git/build/linux && \
+    cmake ../../source && \
+    make -j$(nproc) && make install && \
+    cd ../../.. && rm -rf x265_git
+
+# --------------------------
+# Build libheif
+# --------------------------
+RUN curl -L https://github.com/strukturag/libheif/releases/download/v${LIBHEIF_VERSION}/libheif-${LIBHEIF_VERSION}.tar.gz \
+    | tar zx && \
     cd libheif-${LIBHEIF_VERSION} && \
-    mkdir build && \
-    cd build && \
-    cmake -DENABLE_PLUGIN_LOADING=NO --preset=release .. && \
-    make && \
-    make install && \
-    cd ../.. && \
-    rm -rf libheif-${LIBHEIF_VERSION}
+    mkdir build && cd build && \
+    cmake -DCMAKE_BUILD_TYPE=Release \
+          -DWITH_X265=ON \
+          -DWITH_DE265=ON \
+          -DWITH_AOM=ON \
+          -DWITH_DAV1D=ON \
+          -DENABLE_PLUGIN_LOADING=NO .. && \
+    make -j$(nproc) && make install && \
+    cd ../.. && rm -rf libheif-${LIBHEIF_VERSION}
 
-# Install libvips
-RUN curl -L https://github.com/libvips/libvips/releases/download/v${VIPS_VERSION}/vips-${VIPS_VERSION}.tar.xz | \
-    tar -xJ && \
+# --------------------------
+# Build libvips
+# --------------------------
+RUN curl -L https://github.com/libvips/libvips/releases/download/v${VIPS_VERSION}/vips-${VIPS_VERSION}.tar.xz \
+    | tar -xJ && \
     cd vips-${VIPS_VERSION} && \
-    meson setup build && \
-    cd build && \
-    meson compile && \
-    meson test && \
-    meson install && \
-    cd ../.. && \
-    rm -rf vips-${VIPS_VERSION}
+    meson setup build --buildtype=release && \
+    meson compile -C build && \
+    meson install -C build && \
+    cd .. && rm -rf vips-${VIPS_VERSION}
 
+# --------------------------
+# Stage 2: App build
+# --------------------------
+FROM node:22.16.0-alpine3.20 AS app
+
+USER root
 WORKDIR /app
 
+COPY --from=build /usr/local /usr/local
+ENV LD_LIBRARY_PATH="/usr/local/lib:$LD_LIBRARY_PATH"
+
+# Dependencies for runtime
+RUN apk add --no-cache \
+    glib libjpeg-turbo tiff libpng libexif zlib
+
+# Copy package files
+COPY package*.json ./
+
+# Install and rebuild sharp against local libvips
+RUN npm install --build-from-source && \
+    npm rebuild sharp --build-from-source
+
+# Copy source
 COPY . .
 
-COPY package.json package-lock.json ./
-
-RUN npm install --build-from-source
+# Build NestJS
+RUN npm run build
 
 EXPOSE 3000
 
-CMD ["npm", "start"]
+CMD ["node", "dist/main"]
